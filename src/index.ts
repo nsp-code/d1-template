@@ -122,7 +122,9 @@ export default {
       ctx.waitUntil(kvPut(env, `challenge:${ip}`, "1", { expirationTtl: CHALLENGE_TTL }));
       ctx.waitUntil(kvDelete(env, countKey));
       console.warn(`[CHALLENGE-SET] IP ${ip} — flag written after ${count}x HTTP ${status}`);
-      return response;
+
+      return serveChallengeHTML(TURNSTILE_SITE_KEY, url.pathname);
+      //return response;
     }
 
     // Save updated counter
