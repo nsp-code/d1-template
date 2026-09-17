@@ -47,7 +47,7 @@ export default {
     const response = await fetch(request);
     const status   = response.status;
 
-    console.log(`[ORIGIN] ${url.pathname} → ${status} — IP: ${ip}`);
+    //console.log(`[ORIGIN] ${url.pathname} → ${status} — IP: ${ip}`);
 
     if (!BAD_STATUSES.includes(status)) {
       return response;
