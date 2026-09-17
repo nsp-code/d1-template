@@ -71,7 +71,9 @@ export default {
         // Don't hand a verified scanner a free pass to the origin either.
         console.warn(`[SENSITIVE-PATH][VERIFIED] IP ${ip} — ${url.pathname} — 404, counting`);
         await incrementRecheckCounter(env, ctx, ip, 404);
-        return new Response("Not Found", { status: 404 });
+        
+        return response;
+        //return new Response("Not Found", { status: 404 });
       }
       console.log(`[VERIFIED] IP ${ip} — passing through`);
       const response = await fetch(request);
