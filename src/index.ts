@@ -12,7 +12,45 @@ const TURNSTILE_SECRET_KEY = "0x4AAAAAADh3PDOlVy3VvzfpgMpkbQgmfyM";
 const VERIFY_PATH = "/check-human";
 // ─────────────────────────────────────────────────────────────────────────────
 
-const BAD_STATUSES = [403, 404, 499, 503];
+const BAD_STATUSES = [403, 404, 499, 502, 503];
+
+// ── Known secrets/scanner paths ─────────────────────────────────────────────
+// Nobody visiting a normal WordPress front end ever requests VCS metadata,
+// shell history files, cloud credentials, CI configs, DB dumps, or debug/
+// admin endpoints — a single hit on any of these is treated as a scan, not
+// a mistake, and doesn't need to wait for the 404 counter above to trip.
+// /.well-known/ is excluded since it's legitimately public (ACME, security.txt).
+const SENSITIVE_PATH_PATTERNS = [
+  // Hidden files/dirs: VCS metadata, shell/tool rc files, SSH, CI, IDE configs...
+  /(^|\/)\.(?!well-known(\/|$))[^\/]+/i,
+  // VCS metadata without a leading dot
+  /(^|\/)(CVS|_darcs)(\/|$)/i,
+  // Shell/DB/tool history files that sometimes show up without a leading dot
+  /_history$/i,
+  // Credentials, keys, secrets
+  /credential/i, /secret/i, /authorized_keys$/i, /id_rsa|id_dsa/i, /shadow\.php$/i,
+  // App/framework config & env files
+  /^\/(config|settings)(\.|\/|$)/i, /^\/env\.(js|backup)$/i, /appsettings\.json$/i,
+  /parameters\.yml$/i, /aws[_-]?(exports|config|credentials?)/i,
+  /GoogleService-Info\.plist$/i, /Dockerrun\.aws\.json$/i, /database[_-]?credentials/i,
+  // DB dumps, backups, archives
+  /\.(sql|sql\.gz|sqlite|dump|bak)$/i, /\bbackups?\b/i, /mysqldump/i, /bigdump\.php$/i,
+  // CI/CD, infra-as-code, deploy scripts
+  /\.github\/workflows\//i, /gitlab-ci\.yml$/i, /azure-pipelines\.yml$/i, /ansible\.cfg$/i,
+  /^\/(Jakefile|Cakefile|Rexfile)$/i, /deploy\.sh$/i, /amplify\.ya?ml$/i,
+  /core-cloud-config\.yml$/i, /karma\.conf\.js$/i, /psalm\.xml$/i, /Pipfile\.lock$/i,
+  /phpci\.yml$/i,
+  // Debug/admin/introspection endpoints
+  /phpinfo/i, /server-status$/i, /^\/status$/i, /debug\//i, /actuator\//i, /metrics\//i,
+  /api\/(datasources|frontend\/settings)$/i, /json\/reply\/RequestLogs$/i, /^\/mcp(\.json|\/)?$/i,
+  // Log files scanners like to grab
+  /\.log$/i,
+  // Misc infra/service configs and server config files
+  /storage\.yml$/i, /kibana\.yml$/i, /sphinx\.conf$/i, /collibra\.properties$/i,
+  /project\.properties$/i, /dwsync\.xml$/i, /sftp\.json$/i, /ws-config\.json$/i,
+  /recentservers\.xml$/i, /^\/(www|wwwroot)\.bak$/i, /^\/(app|site)\.zip$/i,
+  /^\/_headers$/i, /^\/(lighttpd|nginx|httpd|apache2?)\.conf$/i,
+];
 
 export default {
   async fetch(request, env, ctx) {
@@ -24,7 +62,15 @@ export default {
       return handleTurnstileVerify(request, env, ip);
     }
 
-    // ── 1. Already verified? ──────────────────────────────────────────────────
+    // ── 1. Known scanner path — flag immediately, don't bother the origin ────
+    if (SENSITIVE_PATH_PATTERNS.some((re) => re.test(url.pathname))) {
+      console.warn(`[SENSITIVE-PATH] IP ${ip} — ${url.pathname} — flagging, skipping origin`);
+      ctx.waitUntil(kvPut(env, `challenge:${ip}`, "1", { expirationTtl: CHALLENGE_TTL }));
+      ctx.waitUntil(kvDelete(env, `verified:${ip}`)); // in case they were previously verified
+      return serveChallengeHTML(TURNSTILE_SITE_KEY, url.pathname);
+    }
+
+    // ── 2. Already verified? ──────────────────────────────────────────────────
     const verified = await kvGet(env, `verified:${ip}`);
     if (verified) {
       console.log(`[VERIFIED] IP ${ip} — passing through`);
@@ -36,24 +82,24 @@ export default {
       return response;
     }
 
-    // ── 2. Currently challenged? ──────────────────────────────────────────────
+    // ── 3. Currently challenged? ──────────────────────────────────────────────
     const challenged = await kvGet(env, `challenge:${ip}`);
     if (challenged) {
       console.warn(`[CHALLENGED] IP ${ip} — serving Turnstile challenge — ${url.pathname}`);
       return serveChallengeHTML(TURNSTILE_SITE_KEY, url.pathname);
     }
 
-    // ── 3. Normal path — forward to origin ───────────────────────────────────
+    // ── 4. Normal path — forward to origin ───────────────────────────────────
     const response = await fetch(request);
     const status   = response.status;
 
-    //console.log(`[ORIGIN] ${url.pathname} → ${status} — IP: ${ip}`);
+    console.log(`[ORIGIN] ${url.pathname} → ${status} — IP: ${ip}`);
 
     if (!BAD_STATUSES.includes(status)) {
       return response;
     }
 
-    // ── 4. Bad status — update hit counter ───────────────────────────────────
+    // ── 5. Bad status — update hit counter ───────────────────────────────────
     const countKey = `404:${ip}`;
     const now      = Math.floor(Date.now() / 1000);
     const stored   = await kvGet(env, countKey, { type: "json" });
@@ -69,9 +115,9 @@ export default {
       }
     }
 
-    console.log(`[FOUND COUNTER] IP ${ip} — ${count}/${MAX_404S} errors (HTTP ${status}) — ${url.pathname}`);
+    console.log(`[COUNTER] IP ${ip} — ${count}/${MAX_404S} errors (HTTP ${status}) — ${url.pathname}`);
 
-    // ── 5. Threshold reached — set challenge flag ─────────────────────────────
+    // ── 6. Threshold reached — set challenge flag ─────────────────────────────
     if (count >= MAX_404S) {
       ctx.waitUntil(kvPut(env, `challenge:${ip}`, "1", { expirationTtl: CHALLENGE_TTL }));
       ctx.waitUntil(kvDelete(env, countKey));
