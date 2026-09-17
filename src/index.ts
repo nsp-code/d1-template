@@ -67,18 +67,14 @@ export default {
     // ── 1. Already verified? (MUST come before the sensitive-path check) ─────
     const verified = await kvGet(env, `verified:${ip}`);
     if (verified) {
-      if (isSensitive) {
-        // Don't hand a verified scanner a free pass to the origin either.
-        console.warn(`[SENSITIVE-PATH][VERIFIED] IP ${ip} — ${url.pathname} — 404, counting`);
-        await incrementRecheckCounter(env, ctx, ip, 404);
-        
-        return response;
-        //return new Response("Not Found", { status: 404 });
-      }
-      console.log(`[VERIFIED] IP ${ip} — passing through`);
+      console.log(`[VERIFIED] IP ${ip} — passing through — ${url.pathname}`);
       const response = await fetch(request);
-      if (BAD_STATUSES.includes(response.status)) {
-        await incrementRecheckCounter(env, ctx, ip, response.status);
+      const status   = response.status;
+
+      // Count sensitive-path hits too, even on 200 — a verified scanner
+      // walking /.git/config, /backup.sql, /phpinfo.php still gets re-challenged.
+      if (isSensitive || BAD_STATUSES.includes(status)) {
+        await incrementRecheckCounter(env, ctx, ip, status);
       }
       return response;
     }
