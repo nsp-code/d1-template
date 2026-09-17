@@ -62,24 +62,32 @@ export default {
       return handleTurnstileVerify(request, env, ip);
     }
 
-    // ── 1. Known scanner path — flag immediately, don't bother the origin ────
-    if (SENSITIVE_PATH_PATTERNS.some((re) => re.test(url.pathname))) {
-      console.warn(`[SENSITIVE-PATH] IP ${ip} — ${url.pathname} — flagging, skipping origin`);
-      ctx.waitUntil(kvPut(env, `challenge:${ip}`, "1", { expirationTtl: CHALLENGE_TTL }));
-      ctx.waitUntil(kvDelete(env, `verified:${ip}`)); // in case they were previously verified
-      return serveChallengeHTML(TURNSTILE_SITE_KEY, url.pathname);
-    }
+    const isSensitive = SENSITIVE_PATH_PATTERNS.some((re) => re.test(url.pathname));
 
-    // ── 2. Already verified? ──────────────────────────────────────────────────
+    // ── 1. Already verified? (MUST come before the sensitive-path check) ─────
     const verified = await kvGet(env, `verified:${ip}`);
     if (verified) {
+      if (isSensitive) {
+        // Don't hand a verified scanner a free pass to the origin either.
+        console.warn(`[SENSITIVE-PATH][VERIFIED] IP ${ip} — ${url.pathname} — 404, counting`);
+        await incrementRecheckCounter(env, ctx, ip, 404);
+        return new Response("Not Found", { status: 404 });
+      }
       console.log(`[VERIFIED] IP ${ip} — passing through`);
       const response = await fetch(request);
-      const status   = response.status;
-      if (BAD_STATUSES.includes(status)) {
-        await incrementRecheckCounter(env, ctx, ip, status);
+      if (BAD_STATUSES.includes(response.status)) {
+        await incrementRecheckCounter(env, ctx, ip, response.status);
       }
       return response;
+    }
+
+    // ── 2. Known scanner path — flag immediately, don't bother the origin ────
+    if (isSensitive) {
+      console.warn(`[SENSITIVE-PATH] IP ${ip} — ${url.pathname} — flagging, skipping origin`);
+      ctx.waitUntil(kvPut(env, `challenge:${ip}`, "1", { expirationTtl: CHALLENGE_TTL }));
+      // NOTE: no kvDelete(verified:) here — unreachable while verified, and it
+      // was what wiped the fresh verification on the post-solve redirect.
+      return serveChallengeHTML(TURNSTILE_SITE_KEY, "/");   // ← return home, not back to /.git/config
     }
 
     // ── 3. Currently challenged? ──────────────────────────────────────────────
