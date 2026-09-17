@@ -1,17 +1,14 @@
-CREATE TABLE IF NOT EXISTS bot_bans (
-    ip TEXT PRIMARY KEY,
+-- schema.sql
+-- Replaces the BOT_BANS KV namespace with a single D1 table.
+-- D1 has no built-in per-key TTL like KV, so expiry is tracked as a
+-- plain unix-timestamp column and enforced in application code
+-- (see kvGet() in index.js), with lazy cleanup on read.
 
-    bad_count INTEGER NOT NULL DEFAULT 0,
-    bad_window_start INTEGER NOT NULL DEFAULT 0,
-
-    recheck_count INTEGER NOT NULL DEFAULT 0,
-    recheck_window_start INTEGER NOT NULL DEFAULT 0,
-
-    challenge_until INTEGER NOT NULL DEFAULT 0,
-    verified_until INTEGER NOT NULL DEFAULT 0,
-
-    updated_at INTEGER NOT NULL DEFAULT 0
+CREATE TABLE IF NOT EXISTS bot_state (
+  key        TEXT PRIMARY KEY,
+  value      TEXT NOT NULL,
+  expires_at INTEGER
 );
 
-CREATE INDEX IF NOT EXISTS idx_bot_bans_updated_at
-    ON bot_bans(updated_at);
+-- Speeds up the optional periodic purge of expired rows.
+CREATE INDEX IF NOT EXISTS idx_bot_state_expires_at ON bot_state (expires_at);
