@@ -69,7 +69,7 @@ export default {
       }
     }
 
-    console.log(`[COUNTER] IP ${ip} — ${count}/${MAX_404S} errors (HTTP ${status}) — ${url.pathname}`);
+    console.log(`[FOUND COUNTER] IP ${ip} — ${count}/${MAX_404S} errors (HTTP ${status}) — ${url.pathname}`);
 
     // ── 5. Threshold reached — set challenge flag ─────────────────────────────
     if (count >= MAX_404S) {
